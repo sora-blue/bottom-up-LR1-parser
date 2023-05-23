@@ -33,9 +33,10 @@ class Symbol:
 
 # 产生式
 class Generator:
-    def __init__(self, start: Symbol, end: list[Symbol]):
+    def __init__(self, start: Symbol, end: list[Symbol], func: callable or None = None):
         self.start = start
         self.end = end
+        self.func = func
 
     def __str__(self):
         return f'{self.start.name} -> {" ".join([s.name for s in self.end])}'
@@ -43,9 +44,10 @@ class Generator:
 
 # 多个产生式后部放在一块，从朴素写法 转换成 产生式的数组
 class ComposedGenerator:
-    def __init__(self, start: str, end: list[list[str]]):
+    def __init__(self, start: str, end: list[list[str]], func: callable or None = None):
         self.start = start
         self.end = end
+        self.func = func
         pass
 
     def toListOfGenerator(self, end_symbols: list[str]):
@@ -53,17 +55,18 @@ class ComposedGenerator:
         ret = []
         retStart = Symbol.fromStr(self.start, end_symbols)
         for g in self.end:
-            ret.append(Generator(start=retStart, end=[Symbol.fromStr(s, end_symbols) for s in g]))
+            ret.append(Generator(start=retStart, end=[Symbol.fromStr(s, end_symbols) for s in g], func=self.func))
         return ret
 
 
 # 项
 class Item:
-    def __init__(self, start: Symbol, end: list[Symbol], point: int, lf_symbol: Symbol):
+    def __init__(self, start: Symbol, end: list[Symbol], point: int, lf_symbol: Symbol, func: callable or None = None):
         self.start = start
         self.end = end
         self.point = point
         self.lf_symbol = lf_symbol
+        self.func = func
 
     def __hash__(self):
         r1 = hash(self.start)
@@ -157,13 +160,16 @@ class ItemSet(Sized):
 # CFG 文法
 class GrammarCFG:
     def __init__(self, start_mark: str, end_mark: str,
-                 end_symbols: list[str] or set[str], c_generators: list[ComposedGenerator]):
+                 end_symbols: list[str] or set[str], c_generators: list[ComposedGenerator] or list[Generator]):
         self.start_mark = Symbol(CONSTANT_GENERATOR_TYPE_NONE_END, start_mark)
         self.end_mark = Symbol(CONSTANT_GENERATOR_TYPE_END, end_mark)  # not tested
         self.end_symbols = [Symbol(CONSTANT_GENERATOR_TYPE_END, s) for s in end_symbols]
         self.generators = []
-        for c_g in c_generators:
-            self.generators += c_g.toListOfGenerator(end_symbols)
+        if isinstance(c_generators[0], ComposedGenerator):
+            for c_g in c_generators:
+                self.generators += c_g.toListOfGenerator(end_symbols)
+        elif isinstance(c_generators[0], Generator):
+            self.generators = c_generators
         # 由非终结符号索引产生式
         self.map_generators = {}
         for g in self.generators:

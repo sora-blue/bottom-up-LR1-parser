@@ -28,7 +28,7 @@ class Configuration:
         self._cnt = 0
         self.__name__ = "Parser config"
 
-    def _show_current(self, action):
+    def show_current(self, action):
         print(f'---step {self._cnt}---')
         print('栈：')
         p_line = " ".join([str(i) for i in self.parse_stk])
@@ -46,23 +46,32 @@ class Configuration:
         p_line = str(action.action_type)
         print(p_line)
 
-    def _forward(self) -> LRSheetAction:
+        print('SDD：')
+        for s in self.cur_symbols:
+            print(s, s.__dict__)
+
+    # 返回一个动作，规约时还返回一个携带语法制导动作的项和栈中的符号
+    def _forward(self) -> [LRSheetAction, [Item, list[Symbol]] or None]:
         action = self.lr_sheet.action(self.parse_stk[-1], self.input_symbols[0])
         if action.action_type == CONSTANT_ACTION_FORWARD_J:
             self.cur_symbols.append(self.input_symbols.pop(0))
             self.parse_stk.append(action.action_to)
         elif action.action_type == CONSTANT_ACTION_REDUCTION_A:
-            self.parse_stk = self.parse_stk[:-action.action_to[1]]
-            self.parse_stk.append(self.lr_sheet.goto(self.parse_stk[-1], action.action_to[0]))
-            self.cur_symbols = self.cur_symbols[:-action.action_to[1]]
-            self.cur_symbols.append(action.action_to[0])
+            item = action.action_to[1]
+            len_end = len(item.end)
+            item_start = action.action_to[0]
+            symbols = self.cur_symbols[-len_end:]
+            self.parse_stk = self.parse_stk[:-len_end]
+            self.parse_stk.append(self.lr_sheet.goto(self.parse_stk[-1], item_start))
+            self.cur_symbols = self.cur_symbols[:-len_end]
+            self.cur_symbols.append(item_start)
+            return [action, [item, symbols]]
         elif action.action_type == CONSTANT_ACTION_ACCEPT:
-            return action
+            return [action, None]
         elif action.action_type == CONSTANT_ACTION_NONE:
             if self.input_symbols[0].name == CONSTANT_GENERATOR_NONE:
                 print(f'{self.__name__}: Wrong when action(state {self.parse_stk[-1]}, symbol {self.input_symbols[0]})')
                 self.input_symbols.pop(0)
-                # 恐慌模式
                 tmp_action = self.lr_sheet.action(self.parse_stk[-1], self.input_symbols[0])
                 while tmp_action.action_type == CONSTANT_ACTION_NONE and len(self.input_symbols) > 0:
                     s = self.input_symbols.pop(0)
@@ -73,16 +82,20 @@ class Configuration:
                 return self._forward()
             self.input_symbols.insert(0, Symbol(CONSTANT_GENERATOR_TYPE_END,
                                                 CONSTANT_GENERATOR_NONE))
-        return action
+        return [action, None]
 
-    def forward(self, show=False) -> bool:
+    def forward(self, show=False) -> [LRSheetAction, list or None]:
         self._cnt += 1
-        action = self._forward()
+        action, l = self._forward()
         if show:
-            self._show_current(action)
+            self.show_current(action)
         if action.action_type == CONSTANT_ACTION_ACCEPT:
-            return True
-        return False
+            # 为空
+            if len(self.input_symbols) == 0 \
+                    or (len(self.input_symbols) == 1 and self.input_symbols[0].content == '$'):
+                return [action, l]
+            raise ValueError("算法为接受时，输入不为空")
+        return [action, l]
 
 
 # LR1语法分析表
@@ -129,6 +142,35 @@ class LRSheet:
         self.state = self._states[self.state_idx]
 
 
+# 符号表
+class SymbolTable:
+    def __init__(self):
+        self._factory_val = collections.namedtuple('entry', ['name', 'st_type'])
+        self._table = dict()
+        self.__name__ = "symbol table"
+
+    def put_entry(self, name: str, st_type: str):
+        if name in self._table:
+            raise ValueError(f'{self.__name__}: {name} already exists as {self._table[name]}')
+        val = self._factory_val(name, st_type)
+        self._table[name] = val
+
+    def get_entry_type(self, name: str):
+        if name not in self._table:
+            raise ValueError(f'{self.__name__}: {name} not in {self._table[name]}')
+        return self._table[name].st_type
+
+    def __str__(self):
+        retStr = ''
+        retStr += f'--- 符号表 ---\n'
+        retStr += f'类型\t\t名称\n'
+        retStr += f'{SPLIT_LINE}\n'
+        for key in self._table.keys():
+            retStr += f'{self._table[key].st_type}\t\t{key}\n'
+        retStr = retStr[:-1]
+        return retStr
+
+
 class Parser:
     def __init__(self, cfg: GrammarCFG, debug_mode=False):
         self._cfg = cfg
@@ -136,6 +178,7 @@ class Parser:
         self._map_first = {}
         self._debug_mode = debug_mode
         self._config = None
+        self._sTable = SymbolTable()
 
     # 对LR(1)项集求闭包 P167
     def get_closure(self, I: ItemSet):
@@ -173,7 +216,7 @@ class Parser:
                             # Note: 特判 结束标记
                             if b not in self._cfg.end_symbols and b != self._cfg.end_mark:
                                 continue
-                            new_item = Item(start=g.start, end=g.end, point=0, lf_symbol=b)
+                            new_item = Item(start=g.start, end=g.end, point=0, lf_symbol=b, func=g.func)
                             tmp_items.add(new_item)
                         # 记录已遍历的非终结符号和其f_list
                         is_iterated.append([symbol, f_list])
@@ -192,7 +235,8 @@ class Parser:
             # 后一个符号不是X
             if item.end[item.point] != X:
                 continue
-            tmp_item = Item(start=item.start, end=item.end, point=item.point + 1, lf_symbol=item.lf_symbol)
+            tmp_item = Item(start=item.start, end=item.end, point=item.point + 1,
+                            lf_symbol=item.lf_symbol, func=item.func)
             ret.add(tmp_item)
         ret = self.get_closure(ret)
         return ret
@@ -398,7 +442,7 @@ class Parser:
                 if self._debug_mode:
                     print(f'2.2: from {state_i_idx} via {symbol} to {item.start}')
                 ss.set_action(state_i_idx, symbol,
-                              LRSheetAction(CONSTANT_ACTION_REDUCTION_A, [item.start, len(item.end)]))
+                              LRSheetAction(CONSTANT_ACTION_REDUCTION_A, [item.start, item]))
         # 2.3 ACTION[i, $]设置为接受
         for state_i_idx in range(len(c)):
             state_i = c[state_i_idx]
@@ -430,15 +474,39 @@ class Parser:
                                      input_symbols=input_symbols,
                                      lr_sheet=lr_sheet)
 
+    @staticmethod
+    def _deep_copy_symbol(obj: Symbol):
+        newObj = Symbol(sType=obj.sType, content=obj.content, name=obj.name)
+        od = obj.__dict__
+        for key in od.keys():
+            newObj.__setattr__(key, od[key])
+        return newObj
+
     # 进行一步动作
     def forward(self, show=False):
         if self._config is None:
             raise ValueError('Configuration not initialized!')
         assert type(self._config) == Configuration
-        return self._config.forward(show=show)
+        action, l = self._config.forward(show=show)
+        result = action.action_type == CONSTANT_ACTION_ACCEPT
+        if l is not None:
+            item, symbols = l
+            if item.func is not None:
+                s = self._config.cur_symbols[-1]
+                s = Parser._deep_copy_symbol(s)
+                item.func(symbols, s, self._sTable)
+                self._config.cur_symbols[-1] = s
+        self._config.show_current(action)
+        return result
 
     # 进行所有剩下的语法分析
     def parse_all(self, show=False):
         do_continue = True
         while do_continue:
             do_continue = not self.forward(show)
+        if show:
+            print(self._sTable)
+            print('--- 三地址码 ---')
+            last_s = self._config.cur_symbols[1]
+            last_code = last_s.__getattribute__(CONSTANT_SDD_ATTR_CODE)
+            print('\n'.join(last_code))
