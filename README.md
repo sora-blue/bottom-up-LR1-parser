@@ -2,4 +2,4 @@
 
 本科 2022-2023 春季学期编译原理实验作业
 
-[文档](https://xlog.sora2aoi.com/bottom-up-lr1-parser)
+[文档](https://sora-9306.xlog.app/bottom-up-LR1-parser)
